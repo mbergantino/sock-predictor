@@ -1,10 +1,17 @@
-
 import pandas as pd
 import ast
 from collections import Counter, defaultdict
 import numpy as np
 from itertools import combinations
+from sock_analysis import score_socks
+import random
 
+secret_sauce = True
+
+# Load data from a CSV file
+# Expected column titles need to include one titled: Winning Numbers
+# csv_path [STRING] - Path to the csv file
+# powerballs [BOOLEAN] - True if extracting the powerballs from winning number sets, False otherwise
 def load_data(csv_path, powerballs=False):
     # Limit data to just important columns
     df = pd.read_csv(csv_path)
@@ -34,13 +41,14 @@ def load_data(csv_path, powerballs=False):
     return df
 
 # Compile a list of the occurences for each winning number/powerball
-def build_win_history(df, powerballs=False):
+# df [DATAFRAME] - CSV table data
+# separator [STRING] - Character to use to separate the numbers in the row
+# powerballs [BOOLEAN] - True if extracting the powerballs from winning number sets, False otherwise
+def build_win_history(df, separator, powerballs=False):
     win_history = defaultdict(list)
     for i, row in df.iterrows():
-        #print(i)
-        #print(row)
-        #print(row['win_nums'])
-        for win_num in row['win_powerballs' if powerballs else 'win_nums'].split(','):
+        #print(f"{i} {row} {row['win_nums']})
+        for win_num in row['win_powerballs' if powerballs else 'win_nums'].split(separator):
             win_history[win_num].append(i)
 
     ''' *** CHECKPOINT ***
@@ -53,150 +61,15 @@ def build_win_history(df, powerballs=False):
         print(win_history['01'])
     '''
 
+    # Return the list of just winning numbers/powerball numbers
     return win_history
 
-def rank_combos(score_dict, combo_size, top_n):
-    score_dict = {int(k): v for k, v in score_dict.items()}
-    
-    top_wins = sorted(score_dict.items(), key=lambda x: -x[1])[:20]
-    win_pool = [win_nums for win_nums, _ in top_wins]
-    combos = list(combinations(win_pool, combo_size))
-    combo_scores = [(combo, sum(score_dict.get(s, 0) for s in combo)) for combo in combos]
-    top_combos = sorted(combo_scores, key=lambda x: -x[1])[:top_n]
-    
-    if combo_size == 1:
-        return sorted([combo[0] for combo, _ in top_combos]) # Flatten from [(3,), (12,)] to [3, 12]
-    else:
-        return [combo for combo, _ in top_combos]
-
-# range_top: Powerball: 1-69, 1-26 ... FL LottoX: 1-53
-def score_wins(df, win_history, powerballs, range_top, top_n, combo_size):
-    all_nums = list(range(1, range_top+1))
-    results = {}
-
-    '''
-    # Overdue - Most number of days since last seen
-    # not very likely to be helpful in this case, so disregard
-    print("Processing Overdue...")
-    overdue_scores = {}
-    for each_num in all_nums:
-        win_num = (("0" if each_num<10 else "") + str(each_num))
-        if win_num in win_history and win_history[win_num]:
-            overdue_score = len(df) - win_history[win_num][-1]
-        else:
-            overdue_score = len(df)
-        overdue_scores[each_num] = overdue_score
-        #print(f"{win_num} :: {overdue_score}")
-    #print(f"Overdue Scores: {overdue_scores}")
-    # Disregarding for sets as the likelihood of multiple overdue indexes hitting simultaneously likely grows exponentially
-    if (combo_size == 1):
-        results['Overdue'] = rank_combos(overdue_scores, 1, top_n)
-    #print(f"Overdue Result = {results['Overdue']}")
-    '''
-
-    '''
-    # Transitions - what index tends to follow another (ideally suited for single number sets)
-    # not very likely to be helpful in this case, so disregard
-    print("Processing Transitions...")
-    transitions = defaultdict(Counter)
-    for i in range(len(df)-1):
-        current = df.iloc[i]['win_powerballs' if powerballs else 'win_nums']
-        next_day = df.iloc[i+1]['win_powerballs' if powerballs else 'win_nums']
-        for c in current:
-            for n in next_day:
-                transitions[c][n] += 1
-    transition_scores = {win_num: transitions[win_num].most_common(1)[0][1] if transitions[win_num] else 0 for win_num in all_nums}
-    if combo_size == 1:
-        results['Transitions'] = rank_combos(transition_scores, combo_size, top_n)
-    '''
-
-    # Modal Gap
-    print("Processing Modal Gap...")
-    modal_gap_scores = {}
-    for win_num, days in win_history.items():
-        if len(days) > 1:
-            gaps = [days[i+1] - days[i] for i in range(len(days)-1)]
-            if gaps:
-                most_common_gap = Counter(gaps).most_common(1)[0][1]
-                modal_gap_scores[win_num] = most_common_gap
-    results['Modal Gap'] = rank_combos(modal_gap_scores, combo_size, top_n)
-    print(f"Modal Gap result = {results['Modal Gap']}")
-
-    '''
-    # Recency Weighted
-    print("Processing Recency Weighted...")
-    recency_scores = {}
-    for each_num in all_nums:
-        appearances = win_history[("0" if each_num<10 else "") + str(each_num)]
-        score = sum(1 / (len(df) - day + 1) for day in appearances)
-        recency_scores[each_num] = score
-        #print(f"{each_num} :: score: {score}")
-    #print(f"recency_scores: {recency_scores}")
-    results['Recency Weighted'] = rank_combos(recency_scores, combo_size, top_n)
-    #print(f"Recency Weighted result = {results['Recency Weighted']}") 
-    '''
-    
-    # Bayesian
-    print("Processing Bayesian...")
-    bayesian_scores = {}
-    for each_num in all_nums:
-        win_num = (("0" if each_num<10 else "") + str(each_num))
-        appearances = win_history[win_num]
-        score = len(appearances) / (sum((len(df) - day) for day in appearances) + 1)
-        bayesian_scores[each_num] = score
-        #print(f"{each_num} :: score: {score}")
-    results['Bayesian'] = rank_combos(bayesian_scores, combo_size, top_n)
-    print(f"Bayesian Result = {results['Bayesian']}")
-
-    '''
-    # Stable Gap
-    print("Processing Stable Gap...")
-    gap_variance_scores = {}
-    for win_num, days in win_history.items():
-        if len(days) > 1:
-            gaps = [days[i+1] - days[i] for i in range(len(days)-1)]
-            variance = np.var(gaps) if gaps else float('inf')
-            gap_variance_scores[win_num] = -variance
-            #print(f"{win_num} :: {gap_variance_scores[win_num]}")
-            #else:
-            #print(f"{win_num} :: {len(days)} ! <1")
-    results['Stable Gap'] = rank_combos(gap_variance_scores, combo_size, top_n)    #print(f"Stable Gap Result = {results['Stable Gap']}")
-    '''
-
-    '''
-    # Last 30 Days
-    print("Processing Last 30 Days...")
-    window_freq_scores = Counter()
-    for i in range(len(df) - 30, len(df)):
-        win_nums = df.iloc[i]['win_powerballs' if powerballs else 'win_nums']
-        for win_num in win_nums.split(','):
-            window_freq_scores[win_num] += 1
-    for each_num in all_nums:
-        win_num = (("0" if each_num<10 else "") + str(each_num))
-        #print(f"{each_num} :: {window_freq_scores[win_num]}")
-    results['Last 30 Days'] = rank_combos(window_freq_scores, combo_size, top_n)
-    #print(f"Last 30 Days Result = {results['Last 30 Days']}")
-    '''
-    
-    # Entropy
-    print("Processing Entropy...")
-    entropy_scores = {}
-    for each_num in all_nums:
-        win_num = (("0" if each_num<10 else "") + str(each_num))
-        days = win_history[win_num]
-        gaps = [days[i+1] - days[i] for i in range(len(days)-1)]
-        prob_dist = [g/sum(gaps) for g in gaps] if gaps else [1]
-        entropy = -sum(p * np.log2(p) for p in prob_dist)
-        entropy_scores[each_num] = -entropy
-        #print(f"{each_num} :: {entropy_scores[each_num]}")
-    results['Entropy'] = rank_combos(entropy_scores, combo_size, top_n)
-    print(f"Entropy Result = {results['Entropy']}")
-
-    return results
-
+# Process all inputs to come up with a consensus around top_n number of outcomes
+# combo_results [DICTIONARY] - Sets of chosen outcomes
+# combo_size [INTEGER] - Desired size of the outcome
+# top_n [INTEGER] - Number of outcomes to produce
+# include_counts [BOOLEAN] - True = Showcase the number of outcomes identified by prediction models
 def consensus_summary(combo_results, combo_size=5, top_n=5, include_counts=True):
-    from collections import Counter
-
     combo_counter = Counter()
     all_sock_occurrences = Counter()
 
@@ -223,63 +96,153 @@ def consensus_summary(combo_results, combo_size=5, top_n=5, include_counts=True)
         top_items = [k for k, _ in top_combo_pairs]
         supporting_data = top_combo_pairs
 
-    print("\nTop consensus sets across methods:")
+    print("\nTop consensus sets across all prediction models:")
     if include_counts:
         for i, top_item in enumerate(top_items):
             print(f"{top_item} appeared in {supporting_data[i][1]} strategies for top prediction.")
-        return top_items, supporting_data
+        return top_items
     else:
         for top_item in top_items:
             print(f"{top_item} is a top predictor.")
         return top_items
 
-'''
-    top_sets = combo_counter.most_common(top_n)
+# Add some randomization to the singular candidate
+# top_keys [SET] - Concensus outcome
+# range_top [INTEGER] - The maximum value in the ball pool
+# rand_predictions [DICTIONARY] - Outcomes saved from prediction models
+# top_n [INTEGER] - Number of outcomes to produce
+def generate_randomized_consensus(top_keys, range_top, rand_predictions, top_n):
+    global secret_sauce
+    
+    consensus_options = []
 
-    if all(freq == 1 for _, freq in top_sets):  # no repeats
-        print("\nNo repeated sets found. Falling back to most frequent individual winning number indexes.")
-        top_wins = [win_num for win_num, _ in all_win_occurrences.most_common(combo_size)]
-        reconstructed_set = tuple(sorted(int(win_num) for win_num in top_wins))
-        print(f"Reconstructed top set from individual win consensus: {reconstructed_set}")
-        return top_sets, reconstructed_set
-    else:
-        return top_sets, None
-    '''
+    if secret_sauce:
+        #print(f"Overdue options ({len(rand_predictions['Overdue'])}):    {rand_predictions['Overdue']}")
+        #print(f"Overplayed options ({len(rand_predictions['Overplayed'])}): {rand_predictions['Overplayed']}")
+    
+        while len(consensus_options) < top_n:
+            new_option = randomize_consensus(top_keys, range_top, rand_predictions)
+            has_duplicates = len(new_option.split('-')) != len(set(new_option.split('-')))
+            if has_duplicates:
+                print(f"{len(consensus_options)} :: {new_option} has duplicates: {has_duplicates}")
+                exit(1)
+            if (new_option not in consensus_options):
+                consensus_options.append(new_option)
+            
+    return consensus_options
+
+# Produce a single randomized candidate that will be aggregated by generate_randomized_consensus()
+# top_keys [SET] - Concensus outcome
+# range_top [INTEGER] - The maximum value in the ball pool
+# rand_predictions [DICTIONARY] - Outcomes saved from prediction models
+def randomize_consensus(top_keys, range_top, rand_predictions):
+    # Devise the list of most overdue and overplayed numbers
+    overdue_predictions = rand_predictions['Overdue']#[2:7] # trim the first 2 items and limit to next 5
+    overplayed_predictions = rand_predictions['Overplayed']#[1:6] # trim the first item and limit to next 5
+    #print(f"Overdue options:    {overdue_predictions}")
+    #print(f"Overplayed options: {overplayed_predictions}")
+
+    # Remove any numbers in top_keys from replacement sets to eliminate the chance of duplicate numbers in output
+    for key in top_keys.split('-'):
+        try:
+            overdue_predictions.remove(int(key))
+        except ValueError:
+            pass  # do nothing!
+        try:
+            overplayed_predictions.remove(int(key))
+        except ValueError:
+            pass  # do nothing!
+    
+    # Randomly choose how much of top_keys to replace (up to 60%), then portion out between 2 techniques
+    scope_to_replace = random.randint(1, int(combo_size*0.60))
+    tech1_scope = random.randint(0, scope_to_replace)
+    tech2_scope = scope_to_replace-tech1_scope
+    tech1_indexes = random.sample(range(0, len(overdue_predictions)-1), tech1_scope)
+    tech2_indexes = random.sample(range(0, len(overplayed_predictions)-1), tech2_scope)
+    #print(f"Replace {scope_to_replace} position overall...")
+    #print(f"Will replace: {tech1_scope} with Overdue values, and {tech2_scope} with Overplayed values")
+    
+    # Randomly choose the indexes in top_keys that we'll replace (number of indexes chosen by scope_to_replace)
+    replace_indexes = random.sample(range(0, len(top_keys.split('-'))-1), scope_to_replace)
+    #print(f"Will replace these indexes: {replace_indexes}")
+
+    for i, replace_index in enumerate(replace_indexes):
+        replace_this = top_keys.split('-')[replace_index]
+
+        # Alternate which strategy will replace the next index
+        if (i%2 and len(tech2_indexes)>0) or len(tech1_indexes)<=0:
+            replace_to_index = tech2_indexes.pop(0)
+            replace_to = overplayed_predictions[replace_to_index]
+            #print(f"Replacing ({replace_this}) with Overplayed[{replace_to_index}] ({replace_to})")
+            top_keys = top_keys.replace(str(replace_this), str(replace_to))
+        else:
+            replace_to_index = tech1_indexes.pop(0)
+            replace_to = overdue_predictions[replace_to_index]
+            #print(f"Replacing ({replace_this}) with Overdue[{replace_to_index}] ({replace_to})")
+            top_keys = top_keys.replace(str(replace_this), str(replace_to))
+
+    # Split, Sort, Re-join
+    top_keys = '-'.join([str(i) for i in sorted([int(s) for s in top_keys.split('-')])])
+
+    #print(f"RANDOMIZED OPTION: {top_keys}")
+
+    return top_keys
 
 if __name__ == "__main__":
+    # CONFIGURATION
+    secret_sauce = True
     RUN_BACKTEST = False
+    BACKTEST_INDEX = -1
     top_n = 11
 
-    # Powerball: 1-69 (PBs: 1-26) ... FL LottoX: 1-53
-    combo_size = 5      # Number of Normal Balls
+    # Powerball: (5x) 1-69 (PBs: 1-26) ... FL LottoX: (6x) 1-53
+    combo_size = 5      # Number of Normal Balls (4-6)
     powerballs = True   # Use of Powerball set?
     range_top = 69      # Size of Normal Ball set
     pb_range_top = 26   # Size of Powerball set
-    
+
+    # LOAD CSV
     df = load_data("sock_draws.csv", powerballs)
-    df_backtest = df.iloc[:-1].copy()  # All rows except last
-    actual_last_set = df.iloc[-1]['Winning Numbers'].split(' ')
+    df_backtest = df.iloc[:BACKTEST_INDEX].copy()  # All rows except last
+    actual_last_set = df.iloc[BACKTEST_INDEX]['Winning Numbers'].split(' ')
     actual_last_set_normal = actual_last_set[:-1]
     actual_last_set_pb = actual_last_set[-1]
 
+    # PROCESS CSV THROUGH PREDICTION MODELS
     print("\nBEGINNING NORMAL BALL PREDICTION ANALYSIS...")
-    history = build_win_history(df_backtest if RUN_BACKTEST else df, False)
-    predictions = score_wins(df_backtest if RUN_BACKTEST else df, history, False, range_top, top_n, combo_size)
+    history = build_win_history(df_backtest if RUN_BACKTEST else df, ',', False)
+    predictions, rand_predictions = score_socks(df_backtest if RUN_BACKTEST else df, history, False, range_top, top_n, combo_size)
     #print("\nTop predictions by method:")
     #for method, combos in predictions.items():
-    #print(f"{method}: {combos}")
-    final_result = consensus_summary(predictions, combo_size, top_n)
+    #    print(f"{method}: {combos}")
 
+    # REACH SOME CONSENSUS
+    final_result = consensus_summary(predictions, combo_size, top_n)
+    build_concensus = Counter()
+    for prediction in final_result:
+        for item in prediction:
+            build_concensus[item] += 1
+    top_keys = '-'.join(sorted([str(item) for item, _ in build_concensus.most_common(combo_size)]))
+    print(f"\nTOP CONSENSUS: {top_keys}")
+
+    # OPTIONALLY PERFORM SOME RANDOMIZATION
+    consensus_options = generate_randomized_consensus(top_keys, range_top, rand_predictions, 10 if top_n>10 else top_n)
+    print(f"Randomized Concensus:")
+    for i, option in enumerate(consensus_options, start=1):
+        if i<10:
+            print(f"{i}.  {option}")
+        else:
+            print(f"{i}. {option}")
+    if actual_last_set_normal in consensus_options:
+        print(f"BACKTEST FOUND!")
+    
     if RUN_BACKTEST:
         print(f"\nBEGINNING NORMAL BALL BACKTEST ANALYSIS FOR {"-".join(actual_last_set_normal)} ({actual_last_set_pb}) ...")  
         actual = set(actual_last_set_normal)  # normalize
         hits = []
 
-        #print(f"{actual_last_set_normal}")
         for p in final_result[0]:
-            #print(f"p :: {p}")
             predicted_set = {p} if isinstance(p, int) else set(p)
-            #print(f"predicted_set :: {predicted_set}")
             if predicted_set == actual:
                 hits.append(predicted_set)
         
@@ -291,22 +254,20 @@ if __name__ == "__main__":
     if powerballs:
         print("\nBEGINNING POWERBALL PREDICTION ANALYSIS...")
         combo_size = 1
-        pb_history = build_win_history(df_backtest if RUN_BACKTEST else df, True)
-        pb_predictions = score_wins(df_backtest if RUN_BACKTEST else df, pb_history, True, pb_range_top, top_n, combo_size)
+        pb_history = build_win_history(df_backtest if RUN_BACKTEST else df, ',', True)
+        pb_predictions, pb_rand_predictions = score_socks(df_backtest if RUN_BACKTEST else df, pb_history, True, pb_range_top, top_n, combo_size)
 
-        print("\nTop PowerBall predictions by method:")
-        for method, combos in pb_predictions.items():
-            print(f"{method}: {combos}")
+        #print("\nTop PowerBall predictions by method:")
+        #for method, combos in pb_predictions.items():
+        #    print(f"{method}: {combos}")
         pb_final_result = consensus_summary(pb_predictions, combo_size, top_n)
 
     if RUN_BACKTEST:
         print("\nBEGINNING POWERBALL BACKTEST ANALYSIS...")
         actual = int(actual_last_set_pb)  # normalize
-        #print(f"{actual_last_set_pb}")
         hits = []
         for p in pb_final_result[0]:
             predicted_num = int(p)
-            #print(f"predicted_num :: {predicted_num}")
             if predicted_num == actual:
                 hits.append(predicted_num)
         
