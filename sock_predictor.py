@@ -22,12 +22,15 @@ def load_data(csv_path, powerballs=False):
         split_series = df['Winning Numbers'].str.split(' ')
         df['win_nums'] = df['Winning Numbers'].str.split(' ').apply(lambda x: ','.join(x[:-1]))
         df['win_powerballs'] = split_series.str[-1]
+    else:
+        split_series = df['Winning Numbers'].str.split(' ')
+        df['win_nums'] = df['Winning Numbers'].str.split(' ').apply(lambda x: ','.join(x))
 
     # Set display option to show full column width
     pd.set_option('display.max_colwidth', None)
 
 
-    ''' *** CHECKPOINT ***
+    #''' *** CHECKPOINT ***
     # Print specific columns
     if (powerballs):
         print("Winning Number & Powerball Data:")
@@ -35,7 +38,7 @@ def load_data(csv_path, powerballs=False):
     else:
         print("Winning Number Data:")
         print(df[['Draw Date', 'win_nums']])
-    '''
+    #'''
     
     # return the dataframe (2D table)
     return df
@@ -182,11 +185,14 @@ def randomize_consensus(top_keys, range_top, rand_predictions):
             top_keys = top_keys.replace(str(replace_this), str(replace_to))
 
     # Split, Sort, Re-join
-    top_keys = '-'.join([str(i) for i in sorted([int(s) for s in top_keys.split('-')])])
+    top_keys = split_sort_rejoin(top_keys, '-')
 
     #print(f"RANDOMIZED OPTION: {top_keys}")
 
     return top_keys
+
+def split_sort_rejoin(origin, separator):
+    return separator.join([str(i) for i in sorted([int(s) for s in origin.split(separator)])])
 
 if __name__ == "__main__":
     # CONFIGURATION
@@ -197,12 +203,24 @@ if __name__ == "__main__":
 
     # Powerball: (5x) 1-69 (PBs: 1-26) ... FL LottoX: (6x) 1-53
     combo_size = 5      # Number of Normal Balls (4-6)
-    powerballs = True   # Use of Powerball set?
     range_top = 69      # Size of Normal Ball set
+    powerballs = True   # Use of Powerball set?
     pb_range_top = 26   # Size of Powerball set
+    input_file = 'results_pb.csv'
+    
+    '''
+    # FL LottoX: (6x) 1-53
+    combo_size = 6      # Number of Normal Balls (4-6)
+    range_top = 53      # Size of Normal Ball set
+    powerballs = False  # Use of Powerball set?
+    pb_range_top = 0    # Size of Powerball set
+    input_file = 'results_flx.csv'
+    '''
 
     # LOAD CSV
-    df = load_data("sock_draws.csv", powerballs)
+    df = load_data(input_file, powerballs)
+
+    # PREPARE FOR BACKTESTING IF UTILIZED
     df_backtest = df.iloc[:BACKTEST_INDEX].copy()  # All rows except last
     actual_last_set = df.iloc[BACKTEST_INDEX]['Winning Numbers'].split(' ')
     actual_last_set_normal = actual_last_set[:-1]
@@ -222,7 +240,9 @@ if __name__ == "__main__":
     for prediction in final_result:
         for item in prediction:
             build_concensus[item] += 1
+            
     top_keys = '-'.join(sorted([str(item) for item, _ in build_concensus.most_common(combo_size)]))
+    top_keys = split_sort_rejoin(top_keys, '-')
     print(f"\nTOP CONSENSUS: {top_keys}")
 
     # OPTIONALLY PERFORM SOME RANDOMIZATION

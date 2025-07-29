@@ -69,8 +69,17 @@ def process_modal_gap(win_history, combo_size, top_n):
 def process_recency_weighted(df, win_history, all_nums, combo_size, top_n):
     print("Processing Recency Weighted...")
     recency_scores = {}
+    
     for each_num in all_nums:
-        appearances = win_history[("0" if each_num<10 else "") + str(each_num)]
+        if int(each_num) in win_history:
+            appearances = win_history[int(each_num)]
+        elif str(each_num) in win_history:
+            appearances = win_history[str(each_num)]
+        elif (("0" if each_num<10 else "") + str(each_num)) in win_history:
+            appearances = win_history[("0" if each_num<10 else "") + str(each_num)]
+        else:
+            print(f"{each_num} :: NO APPEARANCES")
+            continue
         #print(f"{each_num} :: appearances: {appearances}")
         score = statistics.median(1 / (len(df) - day + 1) for day in appearances)
         recency_scores[each_num] = score
@@ -143,9 +152,9 @@ def score_socks(df, win_history, powerballs, range_top, top_n, combo_size):
     #print(f"Bayesian Result = {results['Bayesian']}")
 
     # Entropy
-    entropy_scores = process_entropy(win_history, all_nums, combo_size, top_n)
+    #entropy_scores = process_entropy(win_history, all_nums, combo_size, top_n)
     #print(entropy_scores)
-    results['Entropy'] = rank_combos(entropy_scores, combo_size, top_n)
+    #results['Entropy'] = rank_combos(entropy_scores, combo_size, top_n)
     #print(f"Entropy Result = {results['Entropy']}")
 
     return results, rand_results
