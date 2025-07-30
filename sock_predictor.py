@@ -26,11 +26,13 @@ def load_data(csv_path, powerballs=False):
         split_series = df['Winning Numbers'].str.split(' ')
         df['win_nums'] = df['Winning Numbers'].str.split(' ').apply(lambda x: ','.join(x))
 
+    print(f"Loaded {len(df['win_nums'])} records.")
+
     # Set display option to show full column width
     pd.set_option('display.max_colwidth', None)
 
 
-    #''' *** CHECKPOINT ***
+    ''' *** CHECKPOINT ***
     # Print specific columns
     if (powerballs):
         print("Winning Number & Powerball Data:")
@@ -38,10 +40,36 @@ def load_data(csv_path, powerballs=False):
     else:
         print("Winning Number Data:")
         print(df[['Draw Date', 'win_nums']])
-    #'''
+    '''
     
     # return the dataframe (2D table)
     return df
+
+# Analyze the delta between the numbers
+# df [DATAFRAME] - CSV table data
+def build_delta_history(df):
+    delta_history_counter = Counter()
+    
+    #for i, row in df.iterrows():
+    #print(f"{i} {row} {row['win_nums']}")
+    for win_nums in df['win_nums']:
+        win_nums = win_nums.split(',')
+        #print(win_nums)
+        delta_array = [abs(int(win_nums[i+1]) - int(win_nums[i])) for i in range(len(win_nums) - 1)]
+        delta_string = '→'.join(str(d) for d in delta_array)
+        #print(delta_string)
+        delta_history_counter[delta_string] += 1
+        #print(f"{delta_string} ({delta_history_counter[delta_string]})")
+
+    top_five = delta_history_counter.most_common(5)
+    print(f"Top 5 delta patterns: {top_five}")
+
+    # Ensure the size of the result matches the original number of records 
+    if sum(delta_history_counter.values()) != len(df['win_nums']):
+        print(f"MISMATCH! delta count: {sum(delta_history_counter.values())} vs win records: {len(df['win_nums'])}")
+    
+    # Return the list of just winning numbers/powerball numbers
+    return delta_history_counter
 
 # Compile a list of the occurences for each winning number/powerball
 # df [DATAFRAME] - CSV table data
@@ -200,7 +228,7 @@ if __name__ == "__main__":
     RUN_BACKTEST = False
     BACKTEST_INDEX = -1
     top_n = 11
-
+    
     # Powerball: (5x) 1-69 (PBs: 1-26) ... FL LottoX: (6x) 1-53
     combo_size = 5      # Number of Normal Balls (4-6)
     range_top = 69      # Size of Normal Ball set
@@ -228,6 +256,7 @@ if __name__ == "__main__":
 
     # PROCESS CSV THROUGH PREDICTION MODELS
     print("\nBEGINNING NORMAL BALL PREDICTION ANALYSIS...")
+    delta_history = build_delta_history(df)
     history = build_win_history(df_backtest if RUN_BACKTEST else df, ',', False)
     predictions, rand_predictions = score_socks(df_backtest if RUN_BACKTEST else df, history, False, range_top, top_n, combo_size)
     #print("\nTop predictions by method:")
