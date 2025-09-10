@@ -23,15 +23,20 @@ from itertools import permutations
 
 DATA_URL = "https://data.ny.gov/api/views/d6yy-54nr/rows.csv"
 
+# ---- Pool / Buckets ----
+POOL_MIN = 1
+POOL_MAX = 69
+K_NUMS   = 5
+PB_RANGE = range(1, 27)
+
+USE_CONDITIONAL = True   # if True, use gap-based sampling
 POS_BUCKETS = {
     "N1": range(1, 17),
     "N2": range(11, 30),
     "N3": range(21, 45),
     "N4": range(35, 53),
-    "N5": range(49, 70),
+    "N5": range(56, 70),
 }
-
-PB_RANGE = range(1, 27)
 
 ASSOC_THRESHOLD   = 0.50
 HOT_PCTL          = 0.80
@@ -116,6 +121,11 @@ def near_pair_mix_summary_exact(tickets):
     out = {f"gap={g}%" if g>0 else "clean%": round(100*counts[g]/n,1) for g in sorted(counts)}
     out["counts"] = dict(counts)
     return out
+
+def odd_even_ok(ticket, min_odds=1, min_evens=1):
+    odds = sum(1 for n in ticket if n % 2 == 1)
+    evens = len(ticket) - odds
+    return odds >= min_odds and evens >= min_evens
 
 # ------------------------------- #
 # Data I/O
@@ -256,6 +266,30 @@ def strong_pairs(df_window, threshold=ASSOC_THRESHOLD):
 # Base generation / tweaks
 # ------------------------------- #
 
+def revalidate_ticket(ticket, pool_min=1, pool_max=53, k=6):
+    # Cast to plain ints immediately
+    ticket = [int(n) for n in ticket]
+
+    # Clamp numbers to pool bounds
+    ticket = [min(max(n, pool_min), pool_max) for n in ticket]
+
+    # Deduplicate while preserving sorted order
+    ticket = sorted(set(ticket))
+
+    # Pad if needed
+    import random
+    while len(ticket) < k:
+        candidate = random.randint(pool_min, pool_max)
+        while candidate in ticket:
+            candidate = random.randint(pool_min, pool_max)
+        ticket.append(candidate)
+        ticket = sorted(ticket)
+
+    if len(ticket) > k:
+        ticket = sorted(ticket)[:k]
+
+    return [int(n) for n in ticket]  # ensure clean ints on output
+
 def gen_base_ticket():
     picks, used = [], set()
     for pos in ["N1","N2","N3","N4","N5"]:
@@ -274,16 +308,20 @@ def apply_hot_overdue(picks, hot_pools, overdue_whites, max_hot=2, max_overdue=1
             cand = [x for x in hot_pools.get(pos, set()) if x not in used and x in POS_BUCKETS[pos]]
             if cand:
                 new = random.choice(cand)
-                used.remove(picks[pos_idx]); used.add(new)
+                used.discard(picks[pos_idx])  # discard doesn’t raise KeyError
+                used.add(new)
                 picks[pos_idx] = new
+                picks = revalidate_ticket(picks, pool_min=POOL_MIN, pool_max=POOL_MAX, k=K_NUMS)
     if random.choice([0,1]) == 1:
         pos_idx = random.randrange(5)
         pos = f"N{pos_idx+1}"
         cand = [x for x in overdue_whites if x not in used and x in POS_BUCKETS[pos]]
         if cand:
             new = random.choice(cand)
-            used.remove(picks[pos_idx]); used.add(new)
+            used.discard(picks[pos_idx])  # discard doesn’t raise KeyError
+            used.add(new)
             picks[pos_idx] = new
+            picks = revalidate_ticket(picks, pool_min=POOL_MIN, pool_max=POOL_MAX, k=K_NUMS)
     return picks
 
 def nudge_with_correlations(picks, strong_map):
@@ -683,6 +721,46 @@ def wheel_reduce(tickets, df_for_weights, final_k=WHEEL_TARGET):
 
     return [tickets[i] for i in chosen_idx]
 
+# ================================
+# Use adaptive brackets
+# Adjust N2...N5 based on N1, etc
+# ================================
+
+def compute_gap_distributions(df):
+    """Return empirical gap samples for N2-N1 .. N5-N4."""
+    gap_dists = {}
+    for i in range(1, 5):
+        col1, col2 = f"N{i}", f"N{i+1}"
+        gaps = (df[col2] - df[col1]).dropna()
+        # only keep positive gaps (should always be since numbers are sorted)
+        gaps = gaps[gaps > 0]
+        gap_dists[f"{col2}-{col1}"] = gaps.tolist()
+    return gap_dists
+
+def generate_conditional_ticket(gap_distributions, base_buckets):
+    """Generate one 5-number ticket using conditional gap sampling."""
+    ticket = []
+    # N1: choose freely from its bucket
+    n1 = np.random.choice(list(base_buckets["N1"]))
+    ticket.append(n1)
+
+    # N2..N6: sample gap, add to previous
+    for i in range(2, 6):
+        key = f"N{i}-N{i-1}"
+        if key not in gap_distributions or len(gap_distributions[key]) == 0:
+            # fallback: just pick from bucket
+            ni = np.random.choice(list(base_buckets[f"N{i}"]))
+        else:
+            gap = np.random.choice(gap_distributions[key])
+            ni = ticket[-1] + gap
+            # enforce bucket range
+            lo, hi = min(base_buckets[f"N{i}"]), max(base_buckets[f"N{i}"])
+            if ni < lo: ni = lo
+            if ni > hi: ni = hi
+        ticket.append(int(ni))
+
+    return [int(x) for x in sorted(ticket)]
+
 # ------------------------------- #
 # Main pipeline
 # ------------------------------- #
@@ -695,6 +773,10 @@ def generate_master_set(
     enable_smoothing=ENABLE_SMOOTHING,
     smooth_scope=SMOOTH_SCOPE  # "chosen" or "pool"
 ):
+    buckets = POS_BUCKETS
+    if USE_CONDITIONAL:
+        gap_dists = compute_gap_distributions(df)
+
     windows = make_windows(df)
     df90, df180, df365, df3y, dfall = windows["90d"], windows["180d"], windows["365d"], windows["3y"], windows["all"]
 
@@ -707,11 +789,17 @@ def generate_master_set(
     candidates = []; pbs = []; seen = set(); tries = 0
     while len(candidates) < num_candidates and tries < num_candidates*20:
         tries += 1
-        t = gen_base_ticket()
+        if USE_CONDITIONAL:
+            t = generate_conditional_ticket(gap_dists, buckets)
+        else:
+            t = gen_base_ticket(buckets)
         t = apply_hot_overdue(t, hot, overdue_whites, max_hot=2, max_overdue=1)
         t = nudge_with_correlations(t, corr_map)
+        t = [int(x) for x in t]  # normalize to int
         sig = tuple(t)
         if sig in seen: continue
+        if not odd_even_ok(t, min_odds=1, min_evens=1):
+            continue
         seen.add(sig)
         candidates.append(t)
         pb = sample_pb()
