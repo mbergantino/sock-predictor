@@ -6,6 +6,7 @@ import os, ssl, datetime, random, itertools
 import urllib.request
 import numpy as np
 import pandas as pd
+import re
 from collections import Counter, defaultdict
 from itertools import permutations
 
@@ -21,6 +22,8 @@ LOCAL_FILE = "history6.csv"  # expected columns: either "Winning Numbers" or N1.
 POOL_MIN = 1
 POOL_MAX = 53
 K_NUMS   = 6
+
+WHEEL_TARGET = 10      # THE NUMBER OF FINAL TICKETS TO PRODUCE
 
 # Auto-derive positional buckets from history percentiles (recommended)
 AUTO_BUCKETS = True    # Auto generate the Buckets or use POS_BUCKETS below
@@ -41,16 +44,14 @@ POS_BUCKETS = {
 BUCKET_FLEX = 2         # ±flex allowed during repair
 
 # ---- Candidate shaping ----
-NUM_CANDIDATE_TICKETS = 10000
-ENABLE_WHEEL          = True
-WHEEL_TARGET          = 10
-
-ENABLE_SMOOTHING = True          # bias smoothing across batch
-SMOOTH_SCOPE = "pool"            # "chosen" (only within batch) or "pool" (within 1..POOL_MAX)
+USE_WHEEL = False                  # Boil larger pool down to a sensible set
+NUM_CANDIDATE_TICKETS = 250000     # Pool of tickets to generate before boiling down
+ENABLE_SMOOTHING = False         # Reduce Bias
+SMOOTH_SCOPE = "chosen"          # "chosen" (only within batch) or "pool" (within 1..POOL_MAX)
 SMOOTHING_RADIUS = 3
 
 # ---- Hot / Overdue / Correlation ----
-HOT_PCTL = 0.5                   # top quantile in 90d by position
+HOT_PCTL = 0.67                  # top quantile in 90d by position
 ASSOC_THRESHOLD = 0.67           # 180d strong pair threshold
 
 # ---- Near-pair engine (exact-gap quotas) ----
@@ -113,6 +114,7 @@ def extract_rows_by_date_anchor(pdf_path, output_path):
     rows = []
     game_list = ['LOTTO', 'LOTTO DP', 'X2', 'X3', 'X4', 'X5']
     elimination_list = ['LOTTO DP', 'X2', 'X3', 'X4', 'X5']
+    DATE_REGEX = re.compile(r"\b(0[1-9]|1[0-2])/([0-2][0-9]|3[01])/([0-9]{2})\b")
     
     with fitz.open(pdf_path) as doc:
         for page in doc:
@@ -203,7 +205,7 @@ def extract_rows_by_date_anchor(pdf_path, output_path):
                 #else:
                 #    print(f"ELIMINATING DATA: {index}. {date} :: {values[index]} :: {games[index]}")
 
-            print(f"rows count = {len(rows)}")
+            #print(f"rows count = {len(rows)}")
         
             if max_date_reached: break
 
@@ -816,7 +818,7 @@ def generate_master_set(
     df,
     num_candidates=NUM_CANDIDATE_TICKETS,
     final_k=WHEEL_TARGET,
-    use_wheel=ENABLE_WHEEL,
+    use_wheel=USE_WHEEL,
     enable_smoothing=ENABLE_SMOOTHING,
     smooth_scope=SMOOTH_SCOPE  # "chosen" or "pool"
 ):
@@ -907,6 +909,8 @@ def generate_master_set(
 
 if __name__ == "__main__":
     random.seed()  # set a fixed int for reproducibility if you want
+    if not USE_WHEEL:
+        NUM_CANDIDATE_TICKETS = 5*WHEEL_TARGET
     df = load_history_csv()
     finals, pool = generate_master_set(
         df,

@@ -38,15 +38,15 @@ POS_BUCKETS = {
     "N5": range(56, 70),
 }
 
-ASSOC_THRESHOLD   = 0.50
-HOT_PCTL          = 0.80
-NUM_CANDIDATE_TICKETS = 15000
-WHEEL_TARGET          = 10
+WHEEL_TARGET      = 10             # THE NUMBER OF FINAL TICKETS TO PRODUCE
+ASSOC_THRESHOLD   = 0.67
+HOT_PCTL          = 0.67
 
 # ---- FLAGS ----
-USE_WHEEL = True                   # Boil larger pool down to a sensible set
-ENABLE_SMOOTHING = True            # Reduce Bias/Smoothing
-SMOOTH_SCOPE = "pool"              # What to replace from when smoothing:  "pool" (1-69) or "chosen" (numbers picked)
+USE_WHEEL = False                  # Boil larger pool down to a sensible set
+NUM_CANDIDATE_TICKETS = 250000     # Pool of tickets to generate before boiling down
+ENABLE_SMOOTHING = False           # Reduce Bias
+SMOOTH_SCOPE = "chosen"            # What to replace from when smoothing:  "pool" (1-69) or "chosen" (numbers picked)
 SMOOTHING_RADIUS = 2               # Max difference +/- in smoothing replacement
 
 PB_WEIGHTS = {"mid": 0.55, "hot": 0.225, "cold": 0.225}
@@ -931,6 +931,8 @@ def generate_master_set(
 
 if __name__ == "__main__":
     random.seed()
+    if not USE_WHEEL:
+        NUM_CANDIDATE_TICKETS = 5*WHEEL_TARGET
     df = load_history_csv()
     final10, big_pool, big_pbs = generate_master_set(
         df,
