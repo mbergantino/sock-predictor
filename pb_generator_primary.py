@@ -50,6 +50,9 @@ SMOOTH_SCOPE = "pool"              # What to replace from when smoothing:  "pool
 SMOOTHING_RADIUS = 2               # Max difference +/- in smoothing replacement
 
 PB_WEIGHTS = {"mid": 0.55, "hot": 0.225, "cold": 0.225}
+PB_HOT_WEIGHT = 0.25
+PB_OVERDUE_WEIGHT = 0.15
+PB_RANDOM_WEIGHT = 0.60
 BUCKET_FLEX = 2
 
 # --- NEAR-PAIR CONTROL (Exact-gap quotas) ---
@@ -82,6 +85,55 @@ def reorder_to_buckets(ticket, flex=BUCKET_FLEX):
         if all(in_bucket(perm[i], positions[i], flex) for i in range(5)):
             return list(perm)
     return None
+
+def choose_powerball(df, hot_pctl=0.67):
+    """
+    Pick a Powerball using weighted selection from hot / overdue / full pool.
+    Hot / overdue are computed directly from df (recent window).
+    """
+    PB_MIN = 1
+    PB_MAX = 26
+    
+    # Find the PB column
+    pb_col = None
+    for cand in ["N6", "PB", "Powerball", "Power Ball"]:
+        if cand in df.columns:
+            pb_col = cand
+            break
+    if pb_col is None:
+        raise RuntimeError(f"No Powerball column found in DataFrame (have {df.columns.tolist()})")
+
+    # Frequency of PBs
+    freq = df[pb_col].value_counts().sort_index()
+
+    # Normalize to relative frequency
+    total = freq.sum()
+    probs = freq / total if total > 0 else freq
+
+    # Hot = top X% of frequency mass
+    cutoff = freq.quantile(hot_pctl)
+    hot = list(freq[freq >= cutoff].index)
+
+    # Overdue = not seen in last 60 draws
+    last_seen = {}
+    for idx, row in df[::-1].iterrows():
+        val = int(row[pb_col])
+        if val not in last_seen:
+            last_seen[val] = row["DrawDate"]
+
+    overdue = [pb for pb in range(PB_MIN, PB_MAX+1)
+               if pb not in last_seen]
+
+    if not overdue:
+        overdue = list(set(range(PB_MIN, PB_MAX+1)) - set(hot))
+
+    roll = random.random()
+    if roll < PB_HOT_WEIGHT and hot:
+        return int(random.choice(hot))
+    elif roll < PB_HOT_WEIGHT + PB_OVERDUE_WEIGHT and overdue:
+        return int(random.choice(overdue))
+    else:
+        return random.randint(PB_MIN, PB_MAX)
 
 def ensure_pb_not_in_whites(pb, whites, sampler):
     tries = 0
@@ -122,7 +174,7 @@ def near_pair_mix_summary_exact(tickets):
     out["counts"] = dict(counts)
     return out
 
-def odd_even_ok(ticket, min_odds=1, min_evens=1):
+def odd_even_ok(ticket, min_odds=2, min_evens=2):
     odds = sum(1 for n in ticket if n % 2 == 1)
     evens = len(ticket) - odds
     return odds >= min_odds and evens >= min_evens
@@ -783,27 +835,34 @@ def generate_master_set(
     hot, _ = hot_cold_pools(df90)
     overdue_whites, overdue_pbs = overdue_sets(dfall)
     corr_map = strong_pairs(df180, threshold=ASSOC_THRESHOLD)
+
+    # PB sampler (fallback / mid-band)
     sample_pb = build_powerball_sampler(df)
 
     # 1) Candidates
     candidates = []; pbs = []; seen = set(); tries = 0
     while len(candidates) < num_candidates and tries < num_candidates*20:
         tries += 1
+        # ---- Whites first ----
         if USE_CONDITIONAL:
-            t = generate_conditional_ticket(gap_dists, buckets)
+            whites = generate_conditional_ticket(gap_dists, buckets)
         else:
-            t = gen_base_ticket(buckets)
-        t = apply_hot_overdue(t, hot, overdue_whites, max_hot=2, max_overdue=1)
-        t = nudge_with_correlations(t, corr_map)
-        t = [int(x) for x in t]  # normalize to int
-        sig = tuple(t)
+            whites = gen_base_ticket()
+        whites = apply_hot_overdue(whites, hot, overdue_whites, max_hot=2, max_overdue=1)
+        whites = nudge_with_correlations(whites, corr_map)
+        whites = [int(x) for x in whites]
+        whites = sorted(whites)
+
+        # Uniqueness + odd/even check
+        sig = tuple(whites)
         if sig in seen: continue
-        if not odd_even_ok(t, min_odds=1, min_evens=1):
-            continue
+        if not odd_even_ok(whites, min_odds=2, min_evens=2): continue
         seen.add(sig)
-        candidates.append(t)
-        pb = sample_pb()
-        pb = ensure_pb_not_in_whites(pb, t, sample_pb)
+        candidates.append(whites)
+
+        # ---- Powerball after whites ----
+        pb = choose_powerball(df180)   # uses weighted hot/overdue/random
+        pb = ensure_pb_not_in_whites(pb, whites, sample_pb)
         pbs.append(pb)
 
     # 2) Optional smoothing + repair
@@ -811,6 +870,7 @@ def generate_master_set(
         restrict = True if str(smooth_scope).lower() == "chosen" else False
         candidates, pbs = smooth_batch(candidates, pbs, restrict_to_used=restrict, radius=SMOOTHING_RADIUS)
 
+    # 2b) Reorder to positional buckets
     validated, valid_pbs = [], []
     for t, pb in zip(candidates, pbs):
         fixed = reorder_to_buckets(t, BUCKET_FLEX)
@@ -830,22 +890,11 @@ def generate_master_set(
             validated.append(fixed); valid_pbs.append(pb)
     candidates, pbs = validated, valid_pbs
 
-    # Re-enforce again after repair, then repair again
-    candidates = match_exact_gap_distribution(candidates)
-    validated, valid_pbs = [], []
-    pbs = pbs[:len(candidates)]
-    for t, pb in zip(candidates, pbs):
-        fixed = reorder_to_buckets(t, BUCKET_FLEX)
-        if fixed:
-            validated.append(fixed); valid_pbs.append(pb)
-    candidates, pbs = validated, valid_pbs
-
     if DEBUG_NEAR_MIX:
         print("Candidate near-pair mix:", near_pair_mix_summary_exact(candidates))
 
     # 3) Select finals
     if use_wheel:
-        # Use 180d for coverage weights by default
         final_whites = wheel_reduce(candidates, df_for_weights=df180, final_k=final_k)
     else:
         final_whites = candidates[:final_k]
@@ -857,7 +906,7 @@ def generate_master_set(
     if DEBUG_NEAR_MIX:
         print("Final near-pair mix:", near_pair_mix_summary_exact(final_whites))
 
-    # Attach PBs, resample if collision with whites
+    # Attach PBs (resample if collision with whites)
     white2pb = {}
     for w, pb in zip(candidates, pbs):
         white2pb.setdefault(tuple(sorted(w)), pb)
@@ -868,7 +917,7 @@ def generate_master_set(
         if not fixed: continue
         pb = white2pb.get(tuple(sorted(fixed)))
         if pb is None:
-            pb = sample_pb()
+            pb = choose_powerball(df180)
         pb = ensure_pb_not_in_whites(pb, fixed, sample_pb)
         final.append(sorted(fixed) + [pb])
 
